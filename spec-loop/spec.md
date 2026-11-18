@@ -216,7 +216,7 @@ Orchestrator (unmodified)
   - If assigning `None` over a method fails mypy, the base class instead defines a `trim_context` that reports "no trim" (the same error path below), and processors that trim override it. A model that doesn't trim then just doesn't override it.
   - MiniCPM-o trims, since its Thinker uses full attention (`use_sliding_window: false`). PersonaPlex doesn't: it relies on its sliding window (section 9).
 - **Overflow without a trim** ends the session through `_abort("context", ...)`: the generic `internal_server_error`, close 1013 (the client may start a new session), the cause logged, and `live_errors{reason="context"}`.
-- **The two other context failures**, overflow on the session's first unit and a trim that drops nothing, stay on `_fail(..., "context")`: the generic `internal_server_error`, close 1011, and the same metric. A new session with the same `session.start` would fail the same way, so 1013's "try again" would mislead. Whether these get a log line is OQ2.
+- **The two other context failures**, overflow on the session's first unit and a trim that drops nothing, stay on `_fail`, with reason `context`: the generic `internal_server_error`, close 1011, and the same metric. A new session with the same `session.start` would fail the same way, so 1013's "try again" would mislead. Their message gives the session's prefix size and stage 0's `max_model_len`.
 - **History without a trim.** `render_resume` runs only after a trim, so for a processor with no `trim_context` nothing reads a unit's audio once it's sent. The handler keeps those units in `state.history` without their audio. For PersonaPlex that is 7.5 KB a frame, about 170 MB in a 30-minute session otherwise.
 - **Startup sizing check for models that don't trim.** `init_live_app_state` refuses to start, with a message naming both values, when stage 0's `max_model_len` is less than `session_lifetime_s` worth of units plus the processor's largest possible prefill. The processor reports both:
   - units per second of input (PersonaPlex: 12.5);
@@ -225,6 +225,13 @@ Orchestrator (unmodified)
 - Each overflow logs two ERROR lines from upstream code (`omni_ar_scheduler`, `async_omni_base`) even though the session recovers. This is left as is.
 
 **Lifecycle:** session expiry at `session_lifetime_s`; usage events; cleanup on close releases the slot and aborts the request.
+
+**Ending a session on an error.** Two handler methods end a session on a server-side error. Both send the generic `internal_server_error`, count `live_errors{reason}` and log the cause.
+- `_abort(reason, detail)` closes 1013: a new session may work (the backlog limit, preemption, a full context without a trim).
+- `_fail(message, reason="internal", exc=None)` closes 1011: the server hit something unexpected, or a retry would fail the same way. It logs one error line, `Live session <id> failed (<reason>): <message>`, with the traceback when `exc` is passed.
+  - Every caller passes a message. Before, `_fail` took only an exception and logged nothing.
+  - The three callers that logged before calling it (the session's `run` loop, a failed background task, and `_on_engine_error`) drop their own log line, so each failure logs once.
+  - An `error` on an engine output, unlogged before, now logs through `_fail`.
 
 ## 8. MiniCPM-o 4.5
 
@@ -322,7 +329,7 @@ When stage 0 runs out of KV cache, Live sessions mostly stall rather than being 
 ## 12. Testing and CI
 
 **L1 (CPU)**, `-m "core_model and cpu"`, 203 tests:
-- the handler against a fake engine: session limit, protocol errors, context overflow and resubmission, the backlog limit, preemption cancellation, close;
+- the handler against a fake engine: session limit, protocol errors, context overflow and resubmission, overflow without a trim, the backlog limit, preemption cancellation, close;
 - context trimming, and config validation including the required keys;
 - audio conversion, and protocol events against the openai SDK's `ServerEvent` schema;
 - the MiniCPM-o logits processor and stage hand-off;
@@ -334,7 +341,7 @@ When stage 0 runs out of KV cache, Live sessions mostly stall rather than being 
 - An unpaced test raises `max_input_backlog_s` in its test overlay above its clip's length. Otherwise the whole clip queues at once and the backlog limit ends the session.
 - **conversation:** spoken replies, plus transcripts for MiniCPM-o;
 - **context trim** (MiniCPM-o): a 1024-token context overflowed in about 100 s, then a reply after the trim;
-- **long session** (PersonaPlex): replaces the old 600-frame trim test (see OQ1);
+- **long session** (PersonaPlex, unpaced): replaces the old 600-frame trim test. One session streams past frame 3,000, and replies keep coming after the window starts sliding. Its clip has enough silence after each spoken prompt for the reply to come out before the next one. The no-trim overflow (`_abort`, 1013, `live_errors{reason="context"}`) is covered by the L1 handler tests only;
 - **concurrent sessions:** two at once, a third refused with `session_limit_reached` / 1013, and a closed session's slot reused;
 - **KV exhaustion:** stage 0's KV cache holds one full context (MiniCPM-o 65 blocks of 16; PersonaPlex 40 blocks of 16, since vLLM keeps one or two blocks back), with `max_input_backlog_s: 10`. Two sessions talk until the server ends one or 120 s pass. A stalled session is ended with `internal_server_error` / 1013, `live_errors{reason="backlog"}` rises, no session gets another error, and a new session afterwards gets a spoken reply.
 - Result: all 8 passed on 1× RTX PRO 6000 Blackwell (96 GB) in 15 min 27 s, with PersonaPlex loaded from Hugging Face.
@@ -351,7 +358,7 @@ When stage 0 runs out of KV cache, Live sessions mostly stall rather than being 
 **Before merge, on GPU** (each run needs your approval):
 - **Other PersonaPlex deployments:** `/v1/realtime` duplex and chat on PersonaPlex behave as before with stage 0 as a final output: no extra text outputs reach their clients, and the audio is the same.
 - **PersonaPlex past the window:** vLLM accepts the Live overlay's `max_model_len` and `max_position_embeddings`, stage 0 KV stays near one window per session, and replies stay good past frame 3,000.
-- **RFC performance targets:** real-time factor and time to first audio within 5% of OmniDuplexSessionHandler on MiniCPM-o, measured against the `/v1/realtime` duplex reference (the `minicpmo-duplex-reference` run-remote recipe, which feeds the same scenario audio); RTF ≤ 1.0 on PersonaPlex. The results go in the PR description. Where the measuring client lives is OQ3.
+- **RFC performance targets:** real-time factor and time to first audio within 5% of OmniDuplexSessionHandler on MiniCPM-o, measured against the `/v1/realtime` duplex reference (the `minicpmo-duplex-reference` run-remote recipe, which feeds the same scenario audio); RTF ≤ 1.0 on PersonaPlex. The results go in the PR description. Where the measuring client lives is OQ1.
 
 ## 13. Review response (PR #9220)
 
