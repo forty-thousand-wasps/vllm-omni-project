@@ -75,6 +75,8 @@ Every file area the change touches.
 
 **Docs and example:** `docs/serving/live_sessions_api.md` and its `docs/.nav.yml` entry; `examples/online_serving/live_sessions/livekit/agent.py`.
 
+**Benchmark:** a `/v1/live/sessions` client for the existing full-duplex benchmark, so that one tool measures RTF and time to first audio on `/v1/realtime` duplex and on `/v1/live/sessions`, and nothing else (section 12). Where it plugs in is OQ1.
+
 **Tests and CI**
 - L1: `tests/entrypoints/openai/live/` (audio, config, handler, protocol, trim), `tests/model_executor/models/minicpmo_4_5/test_live_{encoder,logits_processor}.py`, `tests/model_executor/models/personaplex/test_live_stage0.py`, `tests/model_executor/stage_input_processors/test_minicpmo_4_5_live.py`; `/v1/live/sessions` added to `tests/entrypoints/openai_api/test_api_server_guards.py`.
 - E2E: `tests/e2e/online_serving/test_{minicpmo_4_5,personaplex}_live.py`, `helpers/live_sessions.py`, and `write_deploy_overlay` in the shared `tests/helpers/stage_config.py`.
@@ -358,7 +360,11 @@ When stage 0 runs out of KV cache, Live sessions mostly stall rather than being 
 **Before merge, on GPU** (each run needs your approval):
 - **Other PersonaPlex deployments:** `/v1/realtime` duplex and chat on PersonaPlex behave as before with stage 0 as a final output: no extra text outputs reach their clients, and the audio is the same.
 - **PersonaPlex past the window:** vLLM accepts the Live overlay's `max_model_len` and `max_position_embeddings`, stage 0 KV stays near one window per session, and replies stay good past frame 3,000.
-- **RFC performance targets:** real-time factor and time to first audio within 5% of OmniDuplexSessionHandler on MiniCPM-o, measured against the `/v1/realtime` duplex reference (the `minicpmo-duplex-reference` run-remote recipe, which feeds the same scenario audio); RTF ≤ 1.0 on PersonaPlex. The results go in the PR description. Where the measuring client lives is OQ1.
+- **RFC performance targets:** real-time factor and time to first audio within 5% of OmniDuplexSessionHandler on MiniCPM-o, and RTF ≤ 1.0 on PersonaPlex. The results go in the PR description.
+  - **The tool:** the full-duplex benchmark, committed in this PR with a `/v1/live/sessions` client next to its `/v1/realtime` duplex one (see OQ1). It measures only these two endpoints. It isn't wired into CI.
+  - **Same inputs, same definitions on both endpoints.** Both runs get the same scenario audio (the E2E scenarios' clips, which the `minicpmo-duplex-reference` recipe already feeds to `/v1/realtime?duplex=1`) and the checkpoint's `HT_ref_audio.wav` voice for MiniCPM-o.
+  - **Time to first audio** is the existing `ttfp`: from the start of the input stream to the first audio packet.
+  - **RTF:** which definition is OQ2.
 
 ## 13. Review response (PR #9220)
 
