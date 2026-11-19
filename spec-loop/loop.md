@@ -13,7 +13,7 @@ Built from `spec.md` on `feat/live-sessions` (vllm-omni), uncommitted until the 
 - **The generic trim is `trim_to_fraction`.** MiniCPM-o's `trim_context` calls it.
 - **`render_resume` is no longer abstract.** It raises unless a trimming processor overrides it, so PersonaPlex dropped its own.
 - **Sizing hooks:**
-  - `units_per_second()`, which defaults to `1000 / unit_ms`;
+  - `qunits_per_second()`, which defaults to `1000 / unit_ms`;
   - `max_prefix_tokens(model_path)`;
   - a third, `max_tokens_per_unit()` (default 1), so the check doesn't assume one token per unit. The obvious name, `max_unit_tokens`, is already a MiniCPM-o attribute.
 - **PersonaPlex prefill bound.** It is 1,105 tokens (largest voice `VARM2.pt`: 69 rows, 2 × 6 silence frames, 1,024 persona tokens). I checked it on the local checkpoint, where the default persona is 26 tokens.

@@ -1,0 +1,4 @@
+{
+    "python.analysis.extraPaths": ["./vllm", "./vllm-omni"],
+    "python.defaultInterpreterPath": "./venv/bin/python"
+}
